@@ -1,0 +1,26 @@
+{
+    "configurations": [
+        {
+            "name": "Win32",
+            "includePath": [
+                "${default}",
+                "${workspaceFolder}/lib",
+                "${workspaceFolder}/lib/discord-rpc/include",
+                "${workspaceFolder}/lib/discord-rpc/src",
+                "C:/Qt/qtbase-6.8/build/include",
+                "C:/Qt/qtbase-6.8/build/include/QtWidgets",
+                "C:/Qt/qtbase-6.8/build/include/QtCore",
+                "C:/Qt/qtbase-6.8/build/include/QtGui"
+            ],
+            "defines": [
+                "_DEBUG",
+                "UNICODE",
+                "_UNICODE"
+            ],
+            "windowsSdkVersion": "10.0.26100.0",
+            "cStandard": "c17",
+            "intelliSenseMode": "windows-msvc-x64"
+        }
+    ],
+    "version": 4
+}
