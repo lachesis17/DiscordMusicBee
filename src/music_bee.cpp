@@ -3,6 +3,7 @@
 #include <QLabel>
 #include <QFont>
 #include <QVBoxLayout>
+#include <QHBoxLayout>
 #include <QIcon>
 #include <QTimer>
 #include <QMainWindow>
@@ -11,11 +12,18 @@
 #include <QAction>
 #include <QCloseEvent>
 #include <QEvent>
+#include <QPixmap>
+#include <QFile>
+#include <QByteArray>
+#include <QPainter>
+#include <QPainterPath>
+#include <QBitmap>
 #include <cstring>
 #include <string>
 #include <windows.h>
 #include <comdef.h>
 #include "discord_rpc.h"
+#include "musicbee_ipc.h"
 
 // app id from https://discord.com/developers/applications/
 std::string DISCORD_APP_ID = std::getenv("DISCORD_APP_ID");
@@ -29,100 +37,58 @@ struct MusicInfo
     std::string artist;
     std::string title;
     std::string album;
+    std::string artworkPath;
     bool isPlaying = false;
 };
 
-// Function to get current MusicBee track info
+static MusicBeeIPC ipcClient;
+
 MusicInfo getMusicBeeInfo()
 {
     MusicInfo info;
-    HWND musicBeeWindow = NULL;
 
-    // Try to find any window with "MusicBee" in title
-    musicBeeWindow = FindWindow(NULL, L"MusicBee");
-    if (!musicBeeWindow)
+    if (!ipcClient.IsConnected())
     {
-        // Try common MusicBee window class names
-        const wchar_t *classNames[] = {
-            L"WindowsForms10.Window.8.app.0.2bf8098_r11_ad1",
-            L"MusicBee",
-            L"WindowsForms10.Window.8.app.0.141b42a_r6_ad1",
-            NULL};
-
-        for (int i = 0; classNames[i] != NULL; i++)
+        if (!ipcClient.Connect())
         {
-            musicBeeWindow = FindWindow(classNames[i], NULL);
-            if (musicBeeWindow)
-                break;
+            return info;
         }
     }
 
-    // Search all windows for MusicBee in title
-    if (!musicBeeWindow)
+    // play state
+    MBPlayState playState = ipcClient.GetPlayState();
+    info.isPlaying = (playState == MBPlayState::Playing);
+
+    if (info.isPlaying)
     {
-        EnumWindows([](HWND hwnd, LPARAM lParam) -> BOOL
-                    {
-                        wchar_t windowTitle[512];
-                        GetWindowText(hwnd, windowTitle, 512);
-                        std::wstring title(windowTitle);
-
-                        if (title.find(L"MusicBee") != std::wstring::npos)
-                        {
-                            *(HWND *)lParam = hwnd;
-                            return FALSE;
-                        }
-                        return TRUE; },
-                    (LPARAM)&musicBeeWindow);
-    }
-
-    if (!musicBeeWindow)
-    {
-        return info; // MusicBee not found
-    }
-
-    // Get window title
-    wchar_t windowTitle[512];
-    GetWindowText(musicBeeWindow, windowTitle, 512);
-    std::wstring title(windowTitle);
-
-    if (title.find(L" - ") != std::wstring::npos)
-    {
-        // "Artist - Title - MusicBee"
-        size_t firstDash = title.find(L" - ");
-        size_t lastDash = title.rfind(L" - MusicBee");
-
-        if (firstDash != std::wstring::npos && lastDash != std::wstring::npos && firstDash < lastDash)
-        {
-            std::wstring artist = title.substr(0, firstDash);
-            std::wstring song = title.substr(firstDash + 3, lastDash - firstDash - 3);
-
-            info.artist = std::string(artist.begin(), artist.end());
-            info.title = std::string(song.begin(), song.end());
-            info.isPlaying = true;
-        }
-        // "Title - Artist - MusicBee" (reversed)
-        else if (lastDash != std::wstring::npos)
-        {
-            std::wstring trackInfo = title.substr(0, lastDash);
-            size_t dashPos = trackInfo.find(L" - ");
-            if (dashPos != std::wstring::npos)
-            {
-                std::wstring song = trackInfo.substr(0, dashPos);
-                std::wstring artist = trackInfo.substr(dashPos + 3);
-
-                info.title = std::string(song.begin(), song.end());
-                info.artist = std::string(artist.begin(), artist.end());
-                info.isPlaying = true;
-            }
-        }
-    }
-    // (not playing)
-    else if (title == L"MusicBee")
-    {
-        info.isPlaying = false;
+        // track metadata
+        info.title = ipcClient.GetFileTag(MBMetaDataType::TrackTitle);
+        info.artist = ipcClient.GetFileTag(MBMetaDataType::Artist);
+        info.album = ipcClient.GetFileTag(MBMetaDataType::Album);
+        info.artworkPath = ipcClient.GetArtwork();
     }
 
     return info;
+}
+
+QPixmap createRoundedPixmap(const QPixmap &source, int radius)
+{
+    if (source.isNull())
+        return QPixmap();
+
+    QPixmap rounded(source.size());
+    rounded.fill(Qt::transparent);
+
+    QPainter painter(&rounded);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform);
+
+    QPainterPath path;
+    path.addRoundedRect(rounded.rect(), radius, radius);
+    painter.setClipPath(path);
+    painter.drawPixmap(0, 0, source);
+
+    return rounded;
 }
 
 class MainWindow : public QMainWindow
@@ -138,8 +104,11 @@ public:
 private:
     QTimer *discordTimer;
     QLabel *songLabel;
+    QLabel *artworkLabel;
     QSystemTrayIcon *trayIcon;
     QMenu *trayMenu;
+    std::string currentDetails;
+    std::string currentState;
 
     void setupUI()
     {
@@ -155,8 +124,18 @@ private:
         songLabel->setFont(font);
         songLabel->setAlignment(Qt::AlignCenter);
 
+        artworkLabel = new QLabel(this);
+        artworkLabel->setFixedSize(150, 150);
+        artworkLabel->setAlignment(Qt::AlignCenter);
+        artworkLabel->setScaledContents(false);
+        artworkLabel->setStyleSheet("QLabel { border-radius: 10px; }");
+
         auto *layout = new QVBoxLayout(centralWidget);
+        layout->setContentsMargins(20, 20, 20, 20);
+        layout->setSpacing(5);
         layout->addWidget(songLabel);
+        layout->addWidget(artworkLabel);
+        layout->setAlignment(artworkLabel, Qt::AlignCenter);
 
         resize(600, 200);
     }
@@ -229,34 +208,80 @@ private:
     void updateDiscordPresence()
     {
         MusicInfo music = getMusicBeeInfo();
-
         DiscordRichPresence discordPresence;
         memset(&discordPresence, 0, sizeof(discordPresence));
 
         if (music.isPlaying && !music.title.empty())
         {
-            // Create new strings each time to avoid static issues
-            std::string details = "♪ " + music.title;
-            std::string state = "by " + music.artist;
-
-            discordPresence.details = details.c_str();
-            discordPresence.state = state.c_str();
-            discordPresence.largeImageKey = "music";
-            discordPresence.largeImageText = "Listening to music";
-
-            QString labelText = QString::fromStdString("🎧 " + music.title + "\n🎶 " + music.artist);
-            songLabel->setText(labelText);
+            updatePlayingState(discordPresence, music);
         }
         else
         {
-            discordPresence.details = DISCORD_DETAILS;
-            discordPresence.state = DISCORD_STATE;
-            discordPresence.largeImageKey = DISCORD_LARGE_IMAGE_KEY;
-            discordPresence.largeImageText = DISCORD_LARGE_IMAGE_TEXT;
-            songLabel->setText("DiscordMusicBee 🎧\nwaiting for song...");
+            updateIdleState(discordPresence);
         }
 
         Discord_UpdatePresence(&discordPresence);
+    }
+
+    void updatePlayingState(DiscordRichPresence &presence, const MusicInfo &music)
+    {
+        // update discord presence
+        currentDetails = "♪ " + music.title;
+        currentState = "by " + music.artist;
+        presence.details = currentDetails.c_str();
+        presence.state = currentState.c_str();
+        presence.largeImageKey = "music";
+        presence.largeImageText = "Listening to music";
+
+        // update UI
+        QString labelText = QString("🎧 %1 - %2")
+                                .arg(QString::fromStdString(music.title))
+                                .arg(QString::fromStdString(music.artist));
+        songLabel->setText(labelText);
+        updateArtwork(music.artworkPath);
+    }
+
+    void updateIdleState(DiscordRichPresence &presence)
+    {
+        presence.details = DISCORD_DETAILS;
+        presence.state = DISCORD_STATE;
+        presence.largeImageKey = DISCORD_LARGE_IMAGE_KEY;
+        presence.largeImageText = DISCORD_LARGE_IMAGE_TEXT;
+
+        songLabel->setText("DiscordMusicBee 🎧\nwaiting for song...");
+        artworkLabel->clear();
+    }
+
+    void updateArtwork(const std::string &artworkPath)
+    {
+        if (artworkPath.empty())
+        {
+            artworkLabel->clear();
+            return;
+        }
+
+        QString artworkData = QString::fromStdString(artworkPath);
+
+        // is base64
+        if (artworkData.length() <= 150 || !artworkData.contains("/"))
+        {
+            artworkLabel->clear();
+            return;
+        }
+
+        QByteArray imageData = QByteArray::fromBase64(artworkData.toUtf8());
+        QPixmap artwork;
+
+        if (artwork.loadFromData(imageData))
+        {
+            QPixmap scaled = artwork.scaled(150, 150, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            QPixmap rounded = createRoundedPixmap(scaled, 10);
+            artworkLabel->setPixmap(rounded);
+        }
+        else
+        {
+            artworkLabel->clear();
+        }
     }
 };
 

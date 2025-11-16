@@ -31,6 +31,7 @@ set(DISCORD_RPC_SRC
 
 set(PROJECT_SRC
     src/music_bee.cpp
+    src/musicbee_ipc.cpp
 )
 
 set(RESOURCES assets/resources.qrc)
