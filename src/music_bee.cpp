@@ -129,6 +129,7 @@ private:
         artworkLabel->setAlignment(Qt::AlignCenter);
         artworkLabel->setScaledContents(false);
         artworkLabel->setStyleSheet("QLabel { border-radius: 10px; }");
+        setDefaultArtwork();
 
         auto *layout = new QVBoxLayout(centralWidget);
         layout->setContentsMargins(20, 20, 20, 20);
@@ -147,7 +148,12 @@ private:
         trayIcon->setToolTip("DiscordMusicBee - MusicBee Discord Integration");
         trayMenu = new QMenu(this);
 
-        QAction *showAction = new QAction("Show", this);
+        trayMenu->setStyleSheet(
+            "QMenu { padding: 6px; }"
+            "QMenu::item { padding: 6px 20px 6px 10px; }"
+            "QMenu::separator { height: 1px; margin: 4px 0px; }");
+
+        QAction *showAction = new QAction("DiscordMusicBee", this);
         connect(showAction, &QAction::triggered, [this]()
                 {
             showNormal();
@@ -248,15 +254,30 @@ private:
         presence.largeImageKey = DISCORD_LARGE_IMAGE_KEY;
         presence.largeImageText = DISCORD_LARGE_IMAGE_TEXT;
 
-        songLabel->setText("DiscordMusicBee 🎧\nwaiting for song...");
-        artworkLabel->clear();
+        songLabel->setText("🎧 DiscordMusicBee - waiting for song...");
+        setDefaultArtwork();
+    }
+
+    void setDefaultArtwork()
+    {
+        QPixmap icon(":/icon.png");
+
+        if (!icon.isNull())
+        {
+            QPixmap scaled = icon.scaled(150, 150, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            artworkLabel->setPixmap(scaled);
+        }
+        else
+        {
+            artworkLabel->clear();
+        }
     }
 
     void updateArtwork(const std::string &artworkPath)
     {
         if (artworkPath.empty())
         {
-            artworkLabel->clear();
+            setDefaultArtwork();
             return;
         }
 
@@ -265,7 +286,7 @@ private:
         // is base64
         if (artworkData.length() <= 150 || !artworkData.contains("/"))
         {
-            artworkLabel->clear();
+            setDefaultArtwork();
             return;
         }
 
@@ -280,7 +301,7 @@ private:
         }
         else
         {
-            artworkLabel->clear();
+            setDefaultArtwork();
         }
     }
 };
